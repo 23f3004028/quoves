@@ -24,24 +24,22 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- DIRECT API FUNCTION ---
+# --- DIRECT API FUNCTION (SIMPLIFIED) ---
 def call_gemini_api(api_key, model_name, prompt):
     """
-    Direct REST API call to Google Gemini.
-    Using the specific URL format requested to avoid SDK errors.
+    Uses raw REST API to bypass SDK version issues.
+    Mirrors your working simplified logic.
     """
+    # Construct URL exactly as requested
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+    
     headers = {'Content-Type': 'application/json'}
+    
+    # Simplified payload (No generationConfig to avoid errors)
     data = {
         "contents": [{
             "parts": [{"text": prompt}]
-        }],
-        "generationConfig": {
-            "temperature": 0.7,
-            "topK": 40,
-            "topP": 0.95,
-            "maxOutputTokens": 8192,
-        }
+        }]
     }
     
     try:
@@ -144,13 +142,13 @@ with st.sidebar:
     st.title("⚙️ Configuration")
     api_key = st.text_input("Google API Key", type="password")
     
-    # Model Selector (Defaulting to Pro as requested)
+    # Model Selector (Prioritizing Pro models for deep analysis)
     model_options = [
         "gemini-1.5-pro",          # Best logic
         "gemini-1.5-flash",        # Fast fallback
     ]
     selected_model = st.selectbox("AI Model", model_options)
-    st.caption("Using Direct REST API Mode")
+    st.caption("Recommended: gemini-1.5-pro for detailed QOVES reports.")
 
 st.title("🧬 QOVES AI | Full Aesthetic Report")
 st.markdown("### Comprehensive Facial Analysis (100+ Point Logic)")
