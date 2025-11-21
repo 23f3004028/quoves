@@ -144,8 +144,8 @@ with st.sidebar:
     
     # Model Selector (Prioritizing Pro models for deep analysis)
     model_options = [
-        "gemini-1.5-pro",          # Best logic
-        "gemini-1.5-flash",        # Fast fallback
+        "gemini-2.5-pro",          # Best logic
+        "gemini-2.5-flash",        # Fast fallback
     ]
     selected_model = st.selectbox("AI Model", model_options)
     st.caption("Recommended: gemini-1.5-pro for detailed QOVES reports.")
