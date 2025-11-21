@@ -2,250 +2,187 @@ import streamlit as st
 import mediapipe as mp
 import cv2
 import numpy as np
-import pandas as pd
+import google.generativeai as genai
+from PIL import Image
 import math
-from PIL import Image, ImageEnhance
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="QOVES Clone | Comprehensive Analysis",
+    page_title="QOVES AI | Advanced Aesthetic Analysis",
+    page_icon="🧬",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
-# --- STYLING (Dark/Professional) ---
+# --- STYLING ---
 st.markdown("""
     <style>
-    .main {background-color: #0a0a0a; color: #e0e0e0;}
-    .stMetric {background-color: #1f1f1f; padding: 15px; border-radius: 8px; border: 1px solid #333;}
-    h1, h2, h3 {font-family: 'Arial', sans-serif; font-weight: 300; letter-spacing: 1px;}
-    .category-header {color: #4facfe; font-size: 20px; font-weight: bold; margin-top: 20px;}
-    .report-box {background-color: #161616; padding: 20px; border-radius: 10px; border-left: 4px solid #4facfe; margin-bottom: 10px;}
+    .main {background-color: #0e1117; color: #c9d1d9;}
+    h1, h2, h3 {font-family: 'Helvetica Neue', sans-serif; font-weight: 300;}
+    .stButton button {width: 100%; border-radius: 5px; font-weight: bold;}
+    .metric-card {background-color: #161b22; padding: 15px; border-radius: 10px; border: 1px solid #30363d;}
     </style>
     """, unsafe_allow_html=True)
 
-# --- AI ENGINE SETUP ---
-mp_face_mesh = mp.solutions.face_mesh
-face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5)
+# --- SIDEBAR: API KEY ---
+with st.sidebar:
+    st.title("⚙️ Configuration")
+    api_key = st.text_input("Enter Google Gemini API Key", type="password", help="Get your free key at makersuite.google.com")
+    if api_key:
+        genai.configure(api_key=api_key)
+    
+    st.divider()
+    st.info("This app uses Computer Vision (MediaPipe) to extract face geometry, then sends that data to Gemini Pro for a dermatological & aesthetic assessment.")
 
-# --- GEOMETRY HELPERS ---
+# --- GEOMETRY ENGINE (MediaPipe) ---
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(
+    static_image_mode=True,
+    max_num_faces=1,
+    refine_landmarks=True,
+    min_detection_confidence=0.5
+)
+
 def get_coords(p, w, h):
     return int(p.x * w), int(p.y * h)
 
-def calculate_distance(p1, p2, w, h):
+def calc_dist(p1, p2, w, h):
     x1, y1 = get_coords(p1, w, h)
     x2, y2 = get_coords(p2, w, h)
     return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
 
-def calculate_angle(p1, p2, w, h):
+def calc_angle(p1, p2, w, h):
     x1, y1 = get_coords(p1, w, h)
     x2, y2 = get_coords(p2, w, h)
     slope = (y2 - y1) / (x2 - x1 + 1e-6)
     return math.degrees(math.atan(slope))
 
-# --- THE "BRAIN" (ANALYSIS LOGIC) ---
-def analyze_face(landmarks, w, h):
-    data = {}
-    
-    # 1. GENERAL & FACE SHAPE
-    bizygomatic_width = calculate_distance(landmarks[234], landmarks[454], w, h) # Cheek to cheek
-    face_height = calculate_distance(landmarks[10], landmarks[152], w, h) # Hairline to chin
-    bigonial_width = calculate_distance(landmarks[58], landmarks[288], w, h) # Jaw width
-    
-    fw_ratio = face_height / bizygomatic_width
-    jaw_cheek_ratio = bigonial_width / bizygomatic_width
-    
-    if fw_ratio > 1.5: data['face_shape'] = "Oblong/Rectangular"
-    elif fw_ratio < 1.35: data['face_shape'] = "Square/Round"
-    else: data['face_shape'] = "Oval (Ideal)"
-    
-    data['masculinity_score'] = min(10, (jaw_cheek_ratio * 10) + 1) # Crude estimator
-    
-    # 2. EYES & BROWS
-    # Left Eye
-    l_inner = landmarks[133]
-    l_outer = landmarks[33]
-    l_top = landmarks[159]
-    l_bot = landmarks[145]
-    
-    eye_tilt = calculate_angle(l_inner, l_outer, w, h) * -1
-    data['canthal_tilt'] = eye_tilt
-    data['eye_height'] = calculate_distance(l_top, l_bot, w, h)
-    
-    # Brows
-    brow_l_inner = landmarks[65]
-    brow_l_outer = landmarks[46]
-    data['brow_tilt'] = calculate_angle(brow_l_inner, brow_l_outer, w, h) * -1
-    
-    # 3. NOSE
-    nose_w = calculate_distance(landmarks[49], landmarks[279], w, h)
-    nose_h = calculate_distance(landmarks[168], landmarks[2], w, h)
-    data['nose_ratio'] = nose_w / nose_h
-    
-    # 4. LIPS & PHILTRUM
-    philtrum_len = calculate_distance(landmarks[2], landmarks[0], w, h)
-    chin_len = calculate_distance(landmarks[17], landmarks[152], w, h)
-    data['philtrum_chin_ratio'] = philtrum_len / chin_len
-    
-    lip_h = calculate_distance(landmarks[0], landmarks[17], w, h)
-    lip_w = calculate_distance(landmarks[61], landmarks[291], w, h)
-    data['lip_ratio'] = lip_w / lip_h
-    
-    # 5. JAW & CHIN
-    data['jaw_definition'] = "High" if jaw_cheek_ratio > 0.9 else "Soft"
-    
-    return data
-
-# --- REPORT GENERATOR (The "Doctor") ---
-def generate_comprehensive_report(data):
-    report = {}
-    
-    # --- SECTION: GENERAL ---
-    report['General Analysis'] = [
-        f"**Face Shape:** {data['face_shape']}. This is the canvas of your features.",
-        f"**Facial Masculinity:** {data['masculinity_score']:.1f}/10. Based on bigonial width relative to cheeks.",
-        "**Symmetry:** Calculated deviation < 3%. You have high facial symmetry.",
-        "**First Impression:** High dominance traits detected due to jaw structure."
-    ]
-    
-    # --- SECTION: EYES ---
-    eye_advice = "Neutral"
-    if data['canthal_tilt'] > 3: eye_advice = "Excellent Hunter Eye tilt."
-    elif data['canthal_tilt'] < 0: eye_advice = "Negative tilt detected. Protocol: Brow styling to reduce visual droop."
-    
-    report['Eyes'] = [
-        f"**Canthal Tilt:** {data['canthal_tilt']:.1f} degrees. {eye_advice}",
-        "**Eye Area Support:** Good under-eye bone support detected.",
-        "**Recommendations:** Use caffeine solution for under-eye vascularity reduction."
-    ]
-    
-    # --- SECTION: JAW & CHIN ---
-    jaw_advice = "Maintain leanness."
-    if data['jaw_definition'] == "Soft":
-        jaw_advice = "Protocol: Chewing Mastic Gum + Beard contouring to simulate width."
-    
-    report['Jawline'] = [
-        f"**Definition Level:** {data['jaw_definition']}.",
-        f"**Action Plan:** {jaw_advice}",
-        "**Chin Projection:** Within harmonious limits of the Ricketts E-line."
-    ]
-    
-    # --- SECTION: SKIN (Best Practice Protocol) ---
-    report['Skin Health'] = [
-        "**Texture Analysis:** (Approximated) Recommendation for glass skin.",
-        "**AM Routine:** Gentle Cleanser > Vitamin C (15%) > SPF 50+.",
-        "**PM Routine:** Double Cleanse > Retinol (0.5%) > Ceramide Moisturizer.",
-        "**Supplements:** 2g Hydrolyzed Collagen + 500mg Vitamin C daily."
-    ]
-    
-    return report
-
-# --- MAIN APP UI ---
-st.title("🧬 QOVES STUDIO | CLONE")
-st.write("Complete Facial Aesthetic Analysis & Transformation Protocol")
-
-uploaded_file = st.file_uploader("Upload High-Res Front Facing Image", type=['jpg', 'png'])
-
-if uploaded_file:
-    # PRE-PROCESSING
-    image = Image.open(uploaded_file)
+def extract_biometrics(image):
     img_array = np.array(image)
-    img_h, img_w, _ = img_array.shape
+    h, w, _ = img_array.shape
     results = face_mesh.process(img_array)
     
-    if results.multi_face_landmarks:
-        landmarks = results.multi_face_landmarks[0].landmark
-        
-        # 1. RUN ANALYSIS
-        biometrics = analyze_face(landmarks, img_w, img_h)
-        report = generate_comprehensive_report(biometrics)
-        
-        # 2. DRAW VISUALIZATION (Blue "Scanner" Lines)
-        # Jaw
-        p1, p2 = get_coords(landmarks[58], img_w, img_h), get_coords(landmarks[288], img_w, img_h)
-        cv2.line(img_array, p1, p2, (0, 255, 255), 2) 
-        # Eyes
-        p3, p4 = get_coords(landmarks[33], img_w, img_h), get_coords(landmarks[133], img_w, img_h)
-        cv2.line(img_array, p3, p4, (0, 255, 0), 2)
-        
-        # 3. DISPLAY COLUMNS
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            st.image(img_array, caption="Biometric Landmark Scan", use_column_width=True)
-            
-            st.info("✅ Image Processed Successfully")
-            st.metric("Est. Facial Harmony Score", "8.4 / 10", "+1.2 vs Average")
-            
-        with col2:
-            st.subheader("📊 Biometric Dashboard")
-            
-            tab1, tab2, tab3, tab4, tab5 = st.tabs(["General", "Eyes", "Jaw", "Skin", "Timeline"])
-            
-            with tab1:
-                st.markdown("### General Analysis")
-                for item in report['General Analysis']:
-                    st.markdown(f"- {item}")
-                st.progress(biometrics['masculinity_score']/10, text="Masculinity Index")
+    if not results.multi_face_landmarks:
+        return None, None
 
-            with tab2:
-                st.markdown("### Eye & Brow Analysis")
-                for item in report['Eyes']:
-                    st.markdown(f"- {item}")
-                st.markdown("#### Tests Run:")
-                st.caption("Canthal Tilt, IPD, Scleral Show, Brow Ridge Prominence")
+    landmarks = results.multi_face_landmarks[0].landmark
+    
+    # --- RAW METRICS CALCULATION ---
+    # 1. Face Dimensions
+    bizygomatic = calc_dist(landmarks[454], landmarks[234], w, h) # Cheek width
+    face_height = calc_dist(landmarks[10], landmarks[152], w, h) # Hairline to chin
+    bigonial = calc_dist(landmarks[149], landmarks[378], w, h) # Jaw width
+    
+    # 2. Thirds (Vertical)
+    forehead_h = calc_dist(landmarks[10], landmarks[336], w, h)
+    midface_h = calc_dist(landmarks[336], landmarks[2], w, h)
+    lowerface_h = calc_dist(landmarks[2], landmarks[152], w, h)
+    
+    # 3. Eyes
+    ipd = calc_dist(landmarks[468], landmarks[473], w, h) # Interpupillary
+    eye_width_l = calc_dist(landmarks[33], landmarks[133], w, h)
+    canthal_tilt = calc_angle(landmarks[133], landmarks[33], w, h) * -1
+    
+    # 4. Nose & Lips
+    nose_w = calc_dist(landmarks[49], landmarks[279], w, h)
+    mouth_w = calc_dist(landmarks[61], landmarks[291], w, h)
+    philtrum = calc_dist(landmarks[2], landmarks[0], w, h)
+    chin_h = calc_dist(landmarks[17], landmarks[152], w, h)
+    
+    # Compile Data for Gemini
+    metrics = {
+        "Face Shape Ratios": {
+            "Face Width/Height": round(bizygomatic / face_height, 2),
+            "Jaw/Cheek Ratio": round(bigonial / bizygomatic, 2),
+            "Facial Thirds": f"{forehead_h:.0f} : {midface_h:.0f} : {lowerface_h:.0f}"
+        },
+        "Eyes": {
+            "Canthal Tilt (Degrees)": round(canthal_tilt, 1),
+            "Eye Spacing Ratio (IPD/BiZyg)": round(ipd / bizygomatic, 2)
+        },
+        "Midface": {
+            "Midface Ratio (Compactness)": round(ipd / midface_h, 2),
+            "Nose Width Ratio": round(nose_w / bizygomatic, 2)
+        },
+        "Lower Third": {
+            "Chin Height Ratio": round(chin_h / lowerface_h, 2),
+            "Philtrum/Chin Ratio": round(philtrum / chin_h, 2),
+            "Mouth/Jaw Width": round(mouth_w / bigonial, 2)
+        }
+    }
+    
+    return img_array, metrics
 
-            with tab3:
-                st.markdown("### Jaw & Lower Third")
-                for item in report['Jawline']:
-                    st.markdown(f"- {item}")
-            
-            with tab4:
-                st.markdown("### Skin & Texture Protocol")
-                st.warning("⚠️ AI Texture limitation: Generic medical-grade protocol provided.")
-                for item in report['Skin Health']:
-                    st.markdown(f"- {item}")
+# --- GEMINI PROMPT GENERATOR ---
+def generate_analysis(metrics):
+    prompt = f"""
+    Act as a world-renowned Facial Aesthetician and Craniofacial Specialist (like QOVES Studio).
+    Analyze the user's face based STRICTLY on the following biometric data extracted from their image:
+    
+    {metrics}
+    
+    Please generate a highly detailed, clinical, and objective aesthetic report.
+    
+    REQUIREMENTS:
+    1. Structure the report EXACTLY with these sections: 
+       - 'First Impression & Facial Archetype'
+       - 'The Eyes (Canthal Tilt, IPD, Support)'
+       - 'The Midface (Forward Growth, Ratios)'
+       - 'The Lower Third (Jaw, Chin, Dimorphism)'
+       - 'Skin Quality (General Dermatological Advice)'
+       - 'Transformation Protocol (Non-Surgical & Surgical options)'
+       
+    2. Use the provided data to make specific judgments (e.g., "A Jaw/Cheek ratio of {metrics['Face Shape Ratios']['Jaw/Cheek Ratio']} indicates...").
+    3. If the Canthal Tilt is positive, mention "Hunter Eyes" or positive tilt benefits. If negative, suggest styling.
+    4. For the 'Transformation Protocol', provide specific, actionable advice (Mewing, chewing, skincare ingredients like Retinol/Vitamin C, hairstyle changes) to optimize their specific ratios.
+    5. Be honest but constructive. Use professional terminology (Bigonial width, Bizygomatic width, Sexual Dimorphism).
+    
+    Output Format: Clean Markdown.
+    """
+    
+    model = genai.GenerativeModel('gemini-pro')
+    response = model.generate_content(prompt)
+    return response.text
 
-            with tab5:
-                st.markdown("### 🗓️ Transformation Timeline")
-                st.markdown("""
-                **Month 1:**
-                - Reduce sodium intake to <2000mg (Debloat face).
-                - Start Retinol cycle.
-                
-                **Month 3:**
-                - Collagen turnover visible (Skin glow).
-                - Masseter definition improves (if chewing gum protocol followed).
-                
-                **Month 6:**
-                - Full aesthetic transformation.
-                - Hair density maximizes (if Minoxidil used).
-                """)
-                
-        # --- FULL DETAILED LIST BELOW ---
-        st.divider()
-        st.header("Detailed Test Breakdown (100+ Points)")
-        
-        with st.expander("General & Face Shape (8 Tests)"):
-            st.write("First Impression: Dominant")
-            st.write(f"Face Shape: {biometrics['face_shape']}")
-            st.write("Facial Proportions: Rule of Thirds Analyzed")
-            
-        with st.expander("Eyes & Brows (40 Tests)"):
-            st.write(f"Canthal Tilt: {biometrics['canthal_tilt']:.2f}°")
-            st.write("Brow Ridge: Prominent")
-            st.write("Upper Eyelid Exposure: Low (Desired)")
-            st.write("IPD (Inter-pupillary distance): Ideal")
-            
-        with st.expander("Jaw, Chin & Neck (22 Tests)"):
-            st.write(f"Jaw Definition: {biometrics['jaw_definition']}")
-            st.write("Neck Width: Proportional to Jaw")
-            st.write("Ramus Length: Long (Masculine)")
-            
-        with st.expander("Skin & Texture (20 Tests)"):
-            st.write("Acne Scarring: Analysis requires clinical dermatoscopy.")
-            st.write("Pore Visibility: Analysis requires clinical dermatoscopy.")
-            st.write("**Protocol:** See 'Skin' tab for universal cure protocol.")
+# --- APP UI ---
+st.title("🧬 AI Aesthetic Analysis Engine")
+st.write("Upload your photo. The AI measures your face geometry and consults the LLM for a QOVES-style protocol.")
 
-    else:
-        st.error("Face not detected. Please upload a clearer photo.")
+uploaded_file = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
+
+if uploaded_file is not None:
+    image = Image.open(uploaded_file)
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.image(image, caption="Uploaded Image", use_column_width=True)
+        if st.button("RUN FULL ANALYSIS"):
+            if not api_key:
+                st.error("Please enter a Gemini API Key in the sidebar to generate the text report.")
+            else:
+                with st.spinner("Extracting Biometrics..."):
+                    processed_img, metrics = extract_biometrics(image)
+                    
+                if metrics:
+                    st.success("Biometrics Extracted.")
+                    st.json(metrics) # Show raw data
+                    
+                    with st.spinner("Consulting Aesthetic AI (Gemini)..."):
+                        try:
+                            analysis_text = generate_analysis(metrics)
+                            st.session_state['analysis'] = analysis_text
+                        except Exception as e:
+                            st.error(f"API Error: {e}")
+    
+    with col2:
+        if 'analysis' in st.session_state:
+            st.markdown("### 📋 Detailed Aesthetic Report")
+            st.markdown(st.session_state['analysis'])
+            
+            st.download_button(
+                label="Download Report",
+                data=st.session_state['analysis'],
+                file_name="aesthetic_analysis.md",
+                mime="text/markdown"
+            )
