@@ -9,7 +9,7 @@ import math
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="QOVES AI | Direct API Mode",
+    page_title="QOVES AI | Simplified Analysis",
     page_icon="🧬",
     layout="wide"
 )
@@ -23,29 +23,18 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- DIRECT API FUNCTION (Matches your JS Logic) ---
+# --- DIRECT API FUNCTION ---
 def call_gemini_api(api_key, prompt):
-    """
-    Uses raw REST API to bypass SDK version issues.
-    Mirrors: https://generativelanguage.googleapis.com/v1beta/models/...
-    """
-    # We try Flash first, as it's the current standard
-    model = "gemini-2.5-pro" 
+    model = "gemini-1.5-flash" 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    
     headers = {'Content-Type': 'application/json'}
-    data = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }]
-    }
+    data = {"contents": [{"parts": [{"text": prompt}]}]}
     
     try:
         response = requests.post(url, headers=headers, json=data)
-        
-        # Check if 1.5 Flash failed, try 1.5 Pro
+        # Fallback logic
         if response.status_code != 200:
-            model = "gemini-2.5-flash"
+            model = "gemini-1.5-pro"
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
             response = requests.post(url, headers=headers, json=data)
 
@@ -53,7 +42,6 @@ def call_gemini_api(api_key, prompt):
             return response.json()['candidates'][0]['content']['parts'][0]['text']
         else:
             return f"Error: {response.status_code} - {response.text}"
-            
     except Exception as e:
         return f"Connection Error: {e}"
 
@@ -66,18 +54,15 @@ face_mesh = mp_face_mesh.FaceMesh(
     min_detection_confidence=0.5
 )
 
-def calc_dist(p1, p2, w, h):
-    x1, y1 = int(p1.x * w), int(p1.y * h)
-    x2, y2 = int(p2.x * w), int(p2.y * h)
+def dist(p1, p2, w, h):
+    x1, y1 = p1.x * w, p1.y * h
+    x2, y2 = p2.x * w, p2.y * h
     return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
 
-def calc_angle(p1, p2, w, h):
-    x1, y1 = int(p1.x * w), int(p1.y * h)
-    x2, y2 = int(p2.x * w), int(p2.y * h)
-    slope = (y2 - y1) / (x2 - x1 + 1e-6)
-    return math.degrees(math.atan(slope))
+def angle(p1, p2):
+    return math.degrees(math.atan2(p2.y - p1.y, p2.x - p1.x)) * -1
 
-def extract_biometrics(image):
+def extract_comprehensive_biometrics(image):
     img_array = np.array(image)
     h, w, _ = img_array.shape
     results = face_mesh.process(img_array)
@@ -85,41 +70,48 @@ def extract_biometrics(image):
     if not results.multi_face_landmarks:
         return None
 
-    landmarks = results.multi_face_landmarks[0].landmark
+    lm = results.multi_face_landmarks[0].landmark
     
-    # --- METRICS CALCULATION ---
-    bizygomatic = calc_dist(landmarks[454], landmarks[234], w, h)
-    face_height = calc_dist(landmarks[10], landmarks[152], w, h)
-    bigonial = calc_dist(landmarks[149], landmarks[378], w, h)
-    ipd = calc_dist(landmarks[468], landmarks[473], w, h)
-    canthal_tilt = calc_angle(landmarks[133], landmarks[33], w, h) * -1
-    midface_h = calc_dist(landmarks[168], landmarks[0], w, h)
-    nose_w = calc_dist(landmarks[49], landmarks[279], w, h)
+    # Raw Measurements
+    face_width = dist(lm[454], lm[234], w, h)
+    face_height = dist(lm[10], lm[152], w, h)
+    jaw_width = dist(lm[132], lm[361], w, h)
+    ipd = dist(lm[468], lm[473], w, h)
+    eye_width_L = dist(lm[33], lm[133], w, h)
+    intercanthal_dist = dist(lm[133], lm[362], w, h)
+    nose_width = dist(lm[49], lm[279], w, h)
+    nose_height = dist(lm[168], lm[2], w, h)
+    mouth_width = dist(lm[61], lm[291], w, h)
+    philtrum = dist(lm[2], lm[0], w, h)
+    chin_height = dist(lm[17], lm[152], w, h)
     
-    metrics = {
-        "Face Shape": {
-            "Width-to-Height Ratio": round(bizygomatic / face_height, 2),
-            "Jaw-to-Cheek Ratio": round(bigonial / bizygomatic, 2),
+    data = {
+        "General": {
+            "Face_Index": round(face_height / face_width, 2),
+            "Jaw_Cheek_Ratio": round(jaw_width / face_width, 2),
         },
         "Eyes": {
-            "Canthal Tilt": f"{round(canthal_tilt, 1)} degrees",
-            "Eye Spacing (IPD)": f"{int(ipd)} px (relative)"
+            "Canthal_Tilt": round(angle(lm[33], lm[133]), 1),
+            "Eye_Spacing_Ratio": round(intercanthal_dist / eye_width_L, 2),
         },
         "Midface": {
-            "Compactness Ratio": round(ipd / midface_h, 2),
-            "Nose Width Ratio": round(nose_w / bizygomatic, 2)
+            "Midface_Compactness": round(ipd / dist(lm[168], lm[0], w, h), 2),
+            "Nose_Ratio": round(nose_width / nose_height, 2)
+        },
+        "Lower_Third": {
+            "Philtrum_Chin_Ratio": round(philtrum / chin_height, 2),
+            "Mouth_Jaw_Ratio": round(mouth_width / jaw_width, 2)
         }
     }
-    return metrics
+    return data
 
 # --- UI ---
 with st.sidebar:
     st.title("⚙️ Settings")
     api_key = st.text_input("Google API Key", type="password")
-    st.caption("Using Direct REST API (No SDK)")
 
-st.title("🧬 QOVES AI | Direct Mode")
-st.write("Upload photo. We extract geometry and send raw JSON to Gemini 1.5.")
+st.title("🧬 QOVES AI | Simplified Report")
+st.write("Upload your photo for an easy-to-understand aesthetic breakdown.")
 
 uploaded_file = st.file_uploader("Choose Image", type=["jpg", "png", "jpeg"])
 
@@ -129,37 +121,40 @@ if uploaded_file and api_key:
     
     with col1:
         st.image(image, caption="Input", use_column_width=True)
-        if st.button("Run Analysis"):
-            with st.spinner("Measuring Face..."):
-                metrics = extract_biometrics(image)
+        
+        if st.button("Analyze Face"):
+            with st.spinner("Scanning..."):
+                metrics = extract_comprehensive_biometrics(image)
                 
             if metrics:
-                st.success("Measurements Complete")
-                st.json(metrics)
+                st.success("Scan Complete")
                 
-                with st.spinner("Generating Report via API..."):
-                    # PROMPT
+                with st.spinner("Generating Simple Report..."):
+                    # --- SIMPLIFIED PROMPT ---
                     prompt = f"""
-                    Act as a world-class craniofacial aesthetician (QOVES Studio style).
-                    Here is the biometric data for a client: {json.dumps(metrics)}
+                    You are a friendly aesthetic consultant. I will give you facial measurements.
+                    Based on these numbers: {json.dumps(metrics)}
                     
-                    Write a detailed, scientific, yet readable aesthetic report.
-                    1. Analyze the Face Shape ratios (Is it Square, Oval, Oblong? What does the Jaw/Cheek ratio say about dimorphism?).
-                    2. Analyze the Eyes (Discuss Canthal Tilt and spacing).
-                    3. Analyze the Midface (Compactness and forward growth indicators).
-                    4. Give a "Transformation Protocol" with specific advice (e.g., "To increase perceived jaw width...", "To optimize eye area...").
+                    Write a report for a beginner. Use very simple English. No complex medical jargon.
                     
-                    Format in Markdown. Be objective and high-level.
+                    REQUIREMENTS:
+                    1. For every section (Eyes, Jaw, Midface), give a score out of 10 (e.g., "Score: 8/10").
+                    2. Explain WHY you gave that score in 1 simple sentence (e.g., "Your jaw is wide, which looks masculine.").
+                    3. At the very end, create a Markdown Table titled "My Glow-Up Routine".
+                       - Columns: "Action Step", "Why do it?", "Timeline"
+                       - Example Row: | Grow Stubble | Hides soft jawline | 2 Weeks |
+                    
+                    Keep it encouraging but honest.
                     """
                     
                     report = call_gemini_api(api_key, prompt)
                     st.session_state['report'] = report
             else:
-                st.error("Could not detect face. Try a clearer photo.")
+                st.error("Face not found. Use a front-facing photo.")
 
     with col2:
         if 'report' in st.session_state:
-            st.markdown("### 📋 Analysis Report")
+            st.markdown("### 📑 Your Aesthetic Report")
             st.markdown(st.session_state['report'])
 
 elif uploaded_file and not api_key:
