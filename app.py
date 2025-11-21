@@ -1,12 +1,3 @@
-# STEP 1: INSTALL LIBRARIES
-# Copy this into the first cell and run it.
-!pip install streamlit mediapipe opencv-python-headless numpy
-
-# STEP 2: WRITE THE APP FILE
-# Copy this into the second cell and run it.
-# This creates a file called 'app.py' in your virtual machine.
-
-%%writefile app.py
 import streamlit as st
 import mediapipe as mp
 import cv2
