@@ -2,5 +2,5 @@ streamlit
 mediapipe
 opencv-python-headless
 numpy
-pandas
 pillow
+google-generativeai
